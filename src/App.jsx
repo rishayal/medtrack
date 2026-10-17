@@ -5,17 +5,17 @@ const STORAGE_KEY = "medigo_medicines_v1";
 
 const demoMedicines = [
   {
-    id: 1,
+    id: "demo-1",
     name: "Vitamin D",
     dose: "1 tablet",
-    time: "09:00",
+    time: "08:00",
     taken: false,
   },
   {
-    id: 2,
+    id: "demo-2",
     name: "Sample medication",
-    dose: "As prescribed",
-    time: "14:00",
+    dose: "1 tablet",
+    time: "20:00",
     taken: false,
   },
 ];
@@ -26,23 +26,57 @@ function loadMedicines() {
 
     if (saved !== null) {
       const parsed = JSON.parse(saved);
-      if (Array.isArray(parsed)) {
-        return parsed;
-      }
+      return Array.isArray(parsed) ? parsed : demoMedicines;
     }
+
+    return demoMedicines;
   } catch (error) {
-    console.error(error);
+    return demoMedicines;
+  }
+}
+
+function formatTime(time) {
+  if (!time || !time.includes(":")) {
+    return time || "";
   }
 
-  return demoMedicines;
+  const parts = time.split(":");
+  let hour = Number(parts[0]);
+  const minutes = parts[1];
+  const period = hour >= 12 ? "PM" : "AM";
+
+  hour = hour % 12;
+
+  if (hour === 0) {
+    hour = 12;
+  }
+
+  return String(hour) + ":" + minutes + " " + period;
+}
+
+function getGreeting() {
+  const hour = new Date().getHours();
+
+  if (hour < 12) {
+    return "Good morning";
+  }
+
+  if (hour < 17) {
+    return "Good afternoon";
+  }
+
+  return "Good evening";
 }
 
 function App() {
   const [medicines, setMedicines] = useState(loadMedicines);
+
   const [name, setName] = useState("");
   const [dose, setDose] = useState("");
-  const [time, setTime] = useState("09:00");
+  const [time, setTime] = useState("08:00");
+  const [notificationMessage, setNotificationMessage] = useState("");
 
+  // Save medicines whenever the list changes.
   useEffect(() => {
     try {
       localStorage.setItem(
@@ -50,8 +84,61 @@ function App() {
         JSON.stringify(medicines)
       );
     } catch (error) {
-      console.error(error);
+      console.error("Could not save medicines.");
     }
+  }, [medicines]);
+
+  // Check for medication reminders every 30 seconds.
+  useEffect(() => {
+    function checkReminders() {
+      if (
+        !("Notification" in window) ||
+        Notification.permission !== "granted"
+      ) {
+        return;
+      }
+
+      const now = new Date();
+
+      const currentHour = String(now.getHours()).padStart(2, "0");
+      const currentMinute = String(now.getMinutes()).padStart(2, "0");
+
+      const currentTime = currentHour + ":" + currentMinute;
+
+      medicines.forEach((medicine) => {
+        if (medicine.time !== currentTime || medicine.taken) {
+          return;
+        }
+
+        const reminderKey =
+          "medigo_reminded_" +
+          medicine.id +
+          "_" +
+          currentTime +
+          "_" +
+          now.toDateString();
+
+        try {
+          if (sessionStorage.getItem(reminderKey)) {
+            return;
+          }
+
+          new Notification("MediGo Reminder", {
+            body: medicine.name + " - " + medicine.dose,
+          });
+
+          sessionStorage.setItem(reminderKey, "true");
+        } catch (error) {
+          console.error("Could not show medication reminder.");
+        }
+      });
+    }
+
+    checkReminders();
+
+    const interval = setInterval(checkReminders, 30000);
+
+    return () => clearInterval(interval);
   }, [medicines]);
 
   function addMedicine(event) {
@@ -62,27 +149,26 @@ function App() {
     }
 
     const newMedicine = {
-      id: Date.now(),
+      id: String(Date.now()) + "-" + String(Math.random()),
       name: name.trim(),
       dose: dose.trim(),
       time: time,
       taken: false,
     };
 
-    setMedicines((previous) =>
-      [...previous, newMedicine].sort((a, b) =>
-        a.time.localeCompare(b.time)
-      )
-    );
+    setMedicines((currentMedicines) => [
+      ...currentMedicines,
+      newMedicine,
+    ]);
 
     setName("");
     setDose("");
-    setTime("09:00");
+    setTime("08:00");
   }
 
-  function toggleTaken(id) {
-    setMedicines((previous) =>
-      previous.map((medicine) =>
+  function toggleMedicine(id) {
+    setMedicines((currentMedicines) =>
+      currentMedicines.map((medicine) =>
         medicine.id === id
           ? { ...medicine, taken: !medicine.taken }
           : medicine
@@ -91,257 +177,313 @@ function App() {
   }
 
   function deleteMedicine(id) {
-    setMedicines((previous) =>
-      previous.filter((medicine) => medicine.id !== id)
+    setMedicines((currentMedicines) =>
+      currentMedicines.filter((medicine) => medicine.id !== id)
     );
   }
 
-  function formatTime(value) {
-    if (!value) return "";
+  async function enableNotifications() {
+    if (!("Notification" in window)) {
+      setNotificationMessage(
+        "Your browser does not support notifications."
+      );
+      return;
+    }
 
-    const parts = value.split(":");
-    const hour = Number(parts[0]);
-    const minutes = parts[1];
-    const period = hour >= 12 ? "PM" : "AM";
-    const displayHour = hour % 12 || 12;
+    if (Notification.permission === "granted") {
+      setNotificationMessage("Reminders are already enabled.");
+      return;
+    }
 
-    return `${displayHour}:${minutes} `;
+    if (Notification.permission === "denied") {
+      setNotificationMessage(
+        "Notifications are blocked in your browser settings."
+      );
+      return;
+    }
+
+    try {
+      const permission = await Notification.requestPermission();
+
+      if (permission === "granted") {
+        setNotificationMessage(
+          "Medication reminders are enabled!"
+        );
+      } else {
+        setNotificationMessage(
+          "Notifications were not enabled. Check your browser permissions."
+        );
+      }
+    } catch (error) {
+      setNotificationMessage(
+        "Could not enable notifications in this browser."
+      );
+    }
   }
 
-  const total = medicines.length;
-  const takenCount = medicines.filter(
+  const totalMedicines = medicines.length;
+
+  const takenMedicines = medicines.filter(
     (medicine) => medicine.taken
   ).length;
-  const remaining = total - takenCount;
 
-  const hourNow = new Date().getHours();
-  let greeting = "Good evening";
-
-  if (hourNow < 12) {
-    greeting = "Good morning";
-  } else if (hourNow < 18) {
-    greeting = "Good afternoon";
-  }
+  const remainingMedicines = totalMedicines - takenMedicines;
 
   return (
     <div className="app">
       <aside className="sidebar">
-        <div className="brand">
-          <div className="brand-icon">✚</div>
-          <div>
-            <h2>MediGo</h2>
-            <p>Your health companion</p>
-          </div>
+        <div className="logo">
+          <div className="logo-symbol">✚</div>
+          <span>MediGo</span>
         </div>
 
-        <nav className="navigation">
-          <a href="#dashboard" className="nav-link active">
-            <span>⌂</span> Dashboard
-          </a>
-          <a href="#medications" className="nav-link">
-            <span>♡</span> My Medications
-          </a>
-          <a href="#add-medication" className="nav-link">
-            <span>＋</span> Add Medication
-          </a>
-        </nav>
+        <p className="side-label">MENU</p>
 
-        <div className="sidebar-note">
-          <span className="note-icon">🌱</span>
-          <h3>One day at a time</h3>
-          <p>
-            Small steps toward better health are worth celebrating.
-          </p>
+        <div className="nav active">
+          <span>⌂</span>
+          Dashboard
         </div>
 
-        <p className="sidebar-footer">Made with care ♡</p>
+        <div className="sidebar-bottom">
+          <span>💚</span>
+          <p>Your health, one day at a time.</p>
+        </div>
       </aside>
 
-      <main className="main-content" id="dashboard">
+      <main className="main">
         <header className="topbar">
-          <div>
-            <p className="eyebrow">YOUR PERSONAL HEALTH SPACE</p>
-            <h1>My Dashboard</h1>
-          </div>
-          <div className="profile-circle">M</div>
+          <span>My Dashboard</span>
+          <div className="avatar">M</div>
         </header>
 
-        <section className="welcome-card">
+        <section className="welcome">
           <div className="welcome-text">
-            <p className="welcome-label">A LITTLE CHECK-IN</p>
-            <h2>{greeting}, take care of yourself 💚</h2>
-            <p>
-              Every little step counts. Keep track of your medications
-              and give yourself credit for showing up for your health.
+            <p className="eyebrow">
+              YOUR PERSONAL HEALTH COMPANION
             </p>
-            <a href="#medications" className="welcome-button">
-              View my medications →
-            </a>
+
+            <h1>{getGreeting()}!</h1>
+
+            <p className="welcome-note">
+              Take care of yourself, one dose at a time.
+            </p>
           </div>
 
-          <div className="welcome-art" aria-hidden="true">
-            <div className="art-circle">
-              <span>✚</span>
-              <span className="art-heart">♥️</span>
-            </div>
+          <div className="welcome-art">
+            <div className="art-sun">☀️</div>
+            <div className="art-leaf">🌿</div>
+            <div className="art-heart">💚</div>
           </div>
         </section>
 
-        <section className="stats-grid">
+        <section className="section-intro">
+          <div>
+            <h2>Your daily overview</h2>
+            <p>
+              Here is how your medication routine is going.
+            </p>
+          </div>
+        </section>
+
+        <section className="stats">
           <div className="stat-card">
-            <div className="stat-icon green">♡</div>
-            <p>Total medications</p>
-            <h2>{total}</h2>
-            <span>In your list</span>
+            <div className="stat-icon purple">💊</div>
+            <p>Total medicines</p>
+            <h2>{totalMedicines}</h2>
           </div>
 
           <div className="stat-card">
-            <div className="stat-icon purple">✓</div>
-            <p>Marked as taken</p>
-            <h2>{takenCount}</h2>
-            <span>You've checked off</span>
+            <div className="stat-icon green">✓</div>
+            <p>Medicines taken</p>
+            <h2>{takenMedicines}</h2>
           </div>
 
           <div className="stat-card">
-            <div className="stat-icon peach">◷</div>
-            <p>Still remaining</p>
-            <h2>{remaining}</h2>
-            <span>Not marked as taken</span>
+            <div className="stat-icon orange">◷</div>
+            <p>Remaining</p>
+            <h2>{remainingMedicines}</h2>
           </div>
         </section>
 
         <section className="content-grid">
-          <div className="panel medication-panel" id="medications">
+          <div className="panel">
             <div className="panel-heading">
               <div>
-                <p className="eyebrow">YOUR DAILY ROUTINE</p>
                 <h2>My medications</h2>
+                <p>Keep track of your daily doses.</p>
               </div>
-              <span className="count-pill">{total} total</span>
+
+              <span className="count">{totalMedicines}</span>
             </div>
 
-            {medicines.length === 0 ? (
-              <div className="empty-state">
-                <div className="empty-icon">♡</div>
-                <h3>Your list starts here</h3>
-                <p>
-                  Add a medication using the form to keep your list
-                  organized.
-                </p>
-              </div>
-            ) : (
-              <div className="medicine-list">
-                {[...medicines]
-                  .sort((a, b) => a.time.localeCompare(b.time))
-                  .map((medicine) => (
-                    <div
-                      className={`medicine-item ${
-                        medicine.taken ? "medicine-taken" : ""
-                      }`}
-                      key={medicine.id}
-                    >
-                      <div className="medicine-icon">✚</div>
+            <div className="medicine-list">
+              {medicines.length === 0 ? (
+                <div className="empty-state">
+                  <div>💊</div>
+                  <h3>No medicines yet</h3>
+                  <p>
+                    Add your first medication using the form.
+                  </p>
+                </div>
+              ) : (
+                medicines.map((medicine) => (
+                  <div
+                    className="medicine"
+                    key={medicine.id}
+                  >
+                    <div className="pill-icon">💊</div>
 
-                      <div className="medicine-details">
-                        <h3>{medicine.name}</h3>
-                        <p>{medicine.dose}</p>
-                        <span className="medicine-time">
-                          ◷ {formatTime(medicine.time)}
-                        </span>
-                      </div>
-
-                      <div className="medicine-actions">
-                        <button
-                          type="button"
-                          className={
-                            medicine.taken
-                              ? "taken-button"
-                              : "mark-button"
-                          }
-                          onClick={() => toggleTaken(medicine.id)}
-                        >
-                          {medicine.taken ? "✓ Taken" : "Mark taken"}
-                        </button>
-
-                        <button
-                          type="button"
-                          className="delete-button"
-                          onClick={() => deleteMedicine(medicine.id)}
-                          aria-label={`Delete ${medicine.name}`}
-                          title="Delete medication"
-                        >
-                          ×
-                        </button>
-                      </div>
+                    <div className="medicine-info">
+                      <h3>{medicine.name}</h3>
+                      <p>{medicine.dose}</p>
+                      <span>
+                        ◷ {formatTime(medicine.time)}
+                      </span>
                     </div>
-                  ))}
-              </div>
-            )}
 
-            <p className="support-message">
-              🌿 Remember, you're doing your best. Keep going!
-            </p>
+                    <div className="medicine-actions">
+                      <button
+                        type="button"
+                        className={
+                          medicine.taken
+                            ? "taken-button"
+                            : "take-button"
+                        }
+                        onClick={() =>
+                          toggleMedicine(medicine.id)
+                        }
+                      >
+                        {medicine.taken
+                          ? "✓ Taken"
+                          : "Mark taken"}
+                      </button>
+
+                      <button
+                        type="button"
+                        className="delete-button"
+                        aria-label={"Delete " + medicine.name}
+                        onClick={() =>
+                          deleteMedicine(medicine.id)
+                        }
+                        title="Delete medication"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div className="kind-message">
+              💚 Small steps every day make a difference.
+            </div>
           </div>
 
-          <div className="panel add-panel" id="add-medication">
+          <div className="panel add-panel">
             <div className="panel-heading">
               <div>
-                <p className="eyebrow">BUILD YOUR ROUTINE</p>
                 <h2>Add medication</h2>
+                <p>
+                  Enter your medication details below.
+                </p>
               </div>
-              <div className="add-icon">＋</div>
+
+              <div className="plus">+</div>
             </div>
 
-            <form onSubmit={addMedicine} className="medicine-form">
-              <label htmlFor="medicine-name">Medication name</label>
+            <form
+              className="medication-form"
+              onSubmit={addMedicine}
+            >
+              <label htmlFor="medicine-name">
+                Medicine name
+              </label>
+
               <input
                 id="medicine-name"
                 type="text"
                 placeholder="e.g. Vitamin D"
                 value={name}
-                onChange={(event) => setName(event.target.value)}
+                onChange={(event) =>
+                  setName(event.target.value)
+                }
                 required
               />
 
-              <label htmlFor="medicine-dose">Dose instructions</label>
+              <label htmlFor="medicine-dose">Dosage</label>
+
               <input
                 id="medicine-dose"
                 type="text"
                 placeholder="e.g. 1 tablet"
                 value={dose}
-                onChange={(event) => setDose(event.target.value)}
+                onChange={(event) =>
+                  setDose(event.target.value)
+                }
                 required
               />
 
-              <label htmlFor="medicine-time">Medication time</label>
+              <label htmlFor="medicine-time">
+                Reminder time
+              </label>
+
               <input
                 id="medicine-time"
                 type="time"
-                step={60}
                 value={time}
-                onChange={(event) => setTime(event.target.value)}
+                onChange={(event) =>
+                  setTime(event.target.value)
+                }
                 required
               />
 
-              <p className="form-hint">
-                Choose the time specified in your medication instructions.
-              </p>
-
-              <button type="submit" className="submit-button">
+              <button
+                type="submit"
+                className="add-button"
+              >
                 + Add medication
               </button>
             </form>
 
-            <div className="privacy-note">
-              <span>🔒</span>
-              <p>Your list is saved in this browser on this device.</p>
+            <p className="form-note">
+              Double-check your medication and dosage details.
+            </p>
+
+            <div className="reminder-section">
+              <h3>🔔 Medication reminders</h3>
+
+              <p>
+                Allow browser notifications to receive
+                reminders while MediGo is open.
+              </p>
+
+              <button
+                type="button"
+                className="add-button"
+                onClick={enableNotifications}
+              >
+                Enable reminders
+              </button>
+
+              {notificationMessage && (
+                <p role="status" className="form-note">
+                  {notificationMessage}
+                </p>
+              )}
             </div>
           </div>
         </section>
 
-        <footer className="page-footer">
-          <p>MediGo · A little care goes a long way 💚</p>
+        <footer className="bottom-note">
+          <p>Made with 💚 for healthier habits.</p>
         </footer>
+
+        <p className="disclaimer">
+          MediGo is a medication tracking tool, not a
+          substitute for professional medical advice. Follow
+          your healthcare professional's instructions.
+        </p>
       </main>
     </div>
   );
