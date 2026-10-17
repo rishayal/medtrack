@@ -105,7 +105,7 @@ function App() {
     const period = hour >= 12 ? "PM" : "AM";
     const displayHour = hour % 12 || 12;
 
-    return '${displayHour}:${minutes} $ {period}';
+    return `${displayHour}:${minutes} `;
   }
 
   const total = medicines.length;
@@ -267,7 +267,7 @@ function App() {
                           type="button"
                           className="delete-button"
                           onClick={() => deleteMedicine(medicine.id)}
-                          aria-label={'Delete ${medicine.name}'}
+                          aria-label={`Delete ${medicine.name}`}
                           title="Delete medication"
                         >
                           ×
