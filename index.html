@@ -171,6 +171,10 @@
       .alert-banner.climate { background: #fef8ec; border-left-color: #d99b26; }
       .alert-banner h4 { margin: 0 0 4px; font-family: "Manrope", sans-serif; font-size: 14px; color: #5a2a22; }
       .alert-banner.climate h4 { color: #664911; }
+      .alert-banner.reminder { background: #eef6ee; border-left-color: #718f78; align-items: center; }
+      .alert-banner.reminder h4 { color: #2f4a37; }
+      .alert-banner.reminder p { color: #4d6354; }
+      .welcome-button:disabled { opacity: 0.6; cursor: default; }
       .alert-banner p { margin: 0; font-size: 12px; color: #6e4c46; line-height: 1.5; }
       .badge-row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
       .safety-badge { display: inline-block; padding: 3px 8px; border-radius: 6px; font-size: 10px; font-weight: 700; }
@@ -204,7 +208,7 @@
     <div id="root"></div>
 
     <script type="text/babel">
-      const { useState, useEffect } = React;
+      const { useState, useEffect, useRef } = React;
 
       const HEAT_SENSITIVE_MEDS = ["insulin", "amoxicillin", "augmentin", "eye drops", "thyroxine", "levothyroxine"];
       const INTERACTION_PAIRS = [
@@ -239,10 +243,66 @@
         const [activeTab, setActiveTab] = useState("dashboard");
         const [showDoctorReport, setShowDoctorReport] = useState(false);
         const [localTemp, setLocalTemp] = useState(34);
+        const [dueReminders, setDueReminders] = useState([]);
+        const [notifPermission, setNotifPermission] = useState(
+          "Notification" in window ? Notification.permission : "unsupported"
+        );
+        const notifiedRef = useRef(new Set());
 
         useEffect(() => {
           localStorage.setItem("medtrack_data", JSON.stringify(medicines));
         }, [medicines]);
+
+        // Fires the in-app banner, a browser notification and a spoken alert for one medicine
+        const triggerReminder = (med) => {
+          setDueReminders((prev) => (prev.some((r) => r.id === med.id) ? prev : [...prev, med]));
+          if ("Notification" in window && Notification.permission === "granted") {
+            new Notification(`Time to take ${med.name}`, { body: `${med.dosage} • scheduled for ${med.time}` });
+          }
+          if ("speechSynthesis" in window) {
+            window.speechSynthesis.cancel();
+            window.speechSynthesis.speak(
+              new SpeechSynthesisUtterance(`Reminder. Time to take ${med.name}. ${med.dosage}.`)
+            );
+          }
+        };
+
+        // Checks every 10 seconds whether any untaken medicine is due right now
+        useEffect(() => {
+          const checkReminders = () => {
+            const now = new Date();
+            const hhmm = String(now.getHours()).padStart(2, "0") + ":" + String(now.getMinutes()).padStart(2, "0");
+            const today = now.toDateString();
+            medicines.forEach((med) => {
+              const key = `${med.id}-${today}-${med.time}`;
+              if (!med.taken && med.time === hhmm && !notifiedRef.current.has(key)) {
+                notifiedRef.current.add(key);
+                triggerReminder(med);
+              }
+            });
+          };
+          checkReminders();
+          const timer = setInterval(checkReminders, 10000);
+          return () => clearInterval(timer);
+        }, [medicines]);
+
+        const enableReminders = async () => {
+          if (!("Notification" in window)) {
+            setNotifPermission("unsupported");
+            return;
+          }
+          const result = await Notification.requestPermission();
+          setNotifPermission(result);
+        };
+
+        const testReminder = () => {
+          const target = medicines.find((m) => !m.taken) || medicines[0];
+          if (target) triggerReminder(target);
+        };
+
+        const dismissReminder = (id) => {
+          setDueReminders((prev) => prev.filter((r) => r.id !== id));
+        };
 
         const totalMeds = medicines.length;
         const takenCount = medicines.filter((m) => m.taken).length;
@@ -353,6 +413,10 @@
                     <a href="#add-form" className="welcome-button">+ Add Medication</a>
                     <button type="button" className="welcome-button secondary" onClick={loadDemoInteraction}>⚡ Simulate Drug Clash (Judge Demo)</button>
                     <button type="button" className="welcome-button secondary" onClick={() => setShowDoctorReport(!showDoctorReport)}>🩺 {showDoctorReport ? "Hide" : "View"} 10-Sec Doctor Report</button>
+                    <button type="button" className="welcome-button secondary" onClick={enableReminders} disabled={notifPermission === "granted" || notifPermission === "unsupported"}>
+                      🔔 {notifPermission === "granted" ? "Reminders On" : notifPermission === "denied" ? "Reminders Blocked" : notifPermission === "unsupported" ? "Notifications Unsupported" : "Enable Reminders"}
+                    </button>
+                    <button type="button" className="welcome-button secondary" onClick={testReminder}>⏰ Test Reminder</button>
                   </div>
                 </div>
                 <div className="welcome-art">
@@ -361,6 +425,19 @@
               </section>
 
               <div id="safety">
+                {dueReminders.map((med) => (
+                  <div key={med.id} className="alert-banner reminder">
+                    <span>⏰</span>
+                    <div style={{ flex: 1 }}>
+                      <h4>Time to take {med.name}</h4>
+                      <p>{med.dosage} • scheduled for {med.time}</p>
+                    </div>
+                    <div className="medicine-actions">
+                      <button type="button" className="mark-button" onClick={() => { toggleTaken(med.id); dismissReminder(med.id); }}>Mark Taken</button>
+                      <button type="button" className="delete-button" onClick={() => dismissReminder(med.id)}>×</button>
+                    </div>
+                  </div>
+                ))}
                 {activeWarnings.map((item, idx) => (
                   <div key={idx} className="alert-banner">
                     <span>⚠️</span>
